@@ -11,7 +11,6 @@ CREATE TABLE profiles (
     id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
     display_name VARCHAR(100) NOT NULL,
     date_of_birth DATE NOT NULL,
-    age INT GENERATED ALWAYS AS (EXTRACT(YEAR FROM AGE(date_of_birth))) STORED,
     gender gender_type NOT NULL,
     user_category user_type NOT NULL,
     birth_city VARCHAR(100) NOT NULL,
@@ -27,6 +26,10 @@ CREATE TABLE profiles (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Compute age via a view (PostgreSQL rejects AGE() in generated columns)
+CREATE OR REPLACE VIEW profiles_with_age AS
+SELECT *, EXTRACT(YEAR FROM AGE(date_of_birth))::INT AS age FROM profiles;
 
 CREATE TABLE ai_prompt_responses (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
