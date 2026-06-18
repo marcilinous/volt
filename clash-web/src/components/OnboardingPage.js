@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
+import { uploadPhoto } from "@/lib/storage";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import ChipSelector from "@/components/ui/ChipSelector";
