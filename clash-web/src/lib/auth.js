@@ -36,8 +36,13 @@ export function AuthProvider({ children }) {
   }
 
   async function signInWithEmail(email) {
-    return supabase.auth.signInWithOtp({ email });
-  }
+  return supabase.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+    },
+  });
+}
 
   async function verifyOtp(email, token) {
     return supabase.auth.verifyOtp({ email, token, type: "email" });
