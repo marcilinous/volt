@@ -3,16 +3,15 @@ import { useState, useEffect, useMemo } from "react";
 import { useAuth } from "@/lib/auth";
 import { getSwipeStack, recordSwipe } from "@/lib/matching";
 import ProfileCard, { AdCard } from "@/components/cards/ProfileCard";
-import { Heart, X } from "lucide-react";
+import { Heart } from "lucide-react";
 
 export default function SwipeTab() {
-  const { user, profile } = useAuth();
+  const { user } = useAuth();
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState(0);
   const [matchAlert, setMatchAlert] = useState(null);
 
-  // Fetch real profiles from DB
   useEffect(() => {
     if (!user) return;
 
@@ -23,7 +22,6 @@ export default function SwipeTab() {
         console.error("Error fetching profiles:", error);
         setProfiles([]);
       } else {
-        // Map DB schema to ProfileCard format
         const mapped = (data || []).map((p) => ({
           id: p.id,
           name: p.display_name,
@@ -45,7 +43,6 @@ export default function SwipeTab() {
     fetchProfiles();
   }, [user]);
 
-  // Build stack with ad injection at every 3rd position
   const stack = useMemo(() => {
     const items = [];
     let pi = 0;
@@ -76,7 +73,6 @@ export default function SwipeTab() {
     setIndex((p) => p + 1);
   };
 
-  // Loading state
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -85,7 +81,6 @@ export default function SwipeTab() {
     );
   }
 
-  // Match celebration overlay
   if (matchAlert) {
     return (
       <div className="h-full flex flex-col items-center justify-center px-10 text-center">
@@ -113,7 +108,6 @@ export default function SwipeTab() {
     );
   }
 
-  // Empty state
   if (!current || index >= stack.length) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-10">
@@ -128,27 +122,29 @@ export default function SwipeTab() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
+    <div className="h-full flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border)] shrink-0">
         <h2 className="text-lg font-semibold">Discover</h2>
         <span className="text-xs text-[var(--muted)]">
           {Math.min(index + 1, stack.length)} / {stack.length}
         </span>
       </div>
 
-      <div className="flex-1 flex items-center justify-center p-5">
-        {current.type === "ad" ? (
-          <div onClick={() => setIndex((p) => p + 1)} className="cursor-pointer">
-            <AdCard />
-          </div>
-        ) : (
-          <ProfileCard
-            profile={current}
-            onLike={() => handleAction("like")}
-            onPass={() => handleAction("pass")}
-            onSuperLike={() => handleAction("super_like")}
-          />
-        )}
+      <div className="flex-1 overflow-y-auto flex items-start justify-center p-4">
+        <div className="w-full max-w-[400px]">
+          {current.type === "ad" ? (
+            <div onClick={() => setIndex((p) => p + 1)} className="cursor-pointer">
+              <AdCard />
+            </div>
+          ) : (
+            <ProfileCard
+              profile={current}
+              onLike={() => handleAction("like")}
+              onPass={() => handleAction("pass")}
+              onSuperLike={() => handleAction("super_like")}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
