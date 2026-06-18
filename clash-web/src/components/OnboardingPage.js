@@ -6,16 +6,17 @@ import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import ChipSelector from "@/components/ui/ChipSelector";
 import { RELIGIONS, LANGUAGES, INTENTS, USER_TYPES, INCOME_BRACKETS, AI_PROMPTS } from "@/lib/constants";
-import { ArrowLeft, Plus, X, Camera } from "lucide-react";
+import { ArrowLeft, Plus, X } from "lucide-react";
 
 const STEPS = ["photos", "details", "prompts", "intent"];
 
 export default function OnboardingPage() {
-  const { createProfile } = useAuth();
+  const { user, createProfile } = useAuth();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  const [photos, setPhotos] = useState([]);
+  const [photos, setPhotos] = useState([]); // Array of { localPreview, publicUrl }
   const [displayName, setDisplayName] = useState("");
   const [dob, setDob] = useState("");
   const [gender, setGender] = useState("");
@@ -29,27 +30,63 @@ export default function OnboardingPage() {
   const [bio, setBio] = useState("");
   const [answers, setAnswers] = useState(["", "", ""]);
   const [intent, setIntent] = useState("");
+  const [uploadError, setUploadError] = useState("");
 
   const current = STEPS[step];
 
   const canProceed = () => {
     switch (current) {
-      case "photos": return photos.length >= 1;
+      case "photos": return photos.length >= 1 && !uploadingPhoto;
       case "details": return displayName && dob && gender && userCategory && birthCity && currentCity && languages.length > 0;
       case "prompts": return answers.some((a) => a.trim());
       case "intent": return !!intent;
     }
   };
 
-  const handlePhotoUpload = (e) => {
-    const files = Array.from(e.target.files);
-    const urls = files.map((f) => URL.createObjectURL(f));
-    setPhotos((prev) => [...prev, ...urls].slice(0, 6));
+  const handlePhotoUpload = async (e, index) => {
+    const file = e.target.files[0];
+    if (!file || !user) return;
+
+    setUploadingPhoto(true);
+    setUploadError("");
+
+    // Show local preview immediately
+    const localPreview = URL.createObjectURL(file);
+    setPhotos((prev) => {
+      const updated = [...prev];
+      updated[index] = { localPreview, publicUrl: null, uploading: true };
+      return updated;
+    });
+
+    // Upload to Supabase Storage
+    const { url, error } = await uploadPhoto(file, user.id, index);
+
+    if (error) {
+      setUploadError(error);
+      setPhotos((prev) => prev.filter((_, i) => i !== index));
+      setUploadingPhoto(false);
+      return;
+    }
+
+    // Replace preview with real public URL
+    setPhotos((prev) => {
+      const updated = [...prev];
+      updated[index] = { localPreview, publicUrl: url, uploading: false };
+      return updated;
+    });
+    setUploadingPhoto(false);
+  };
+
+  const handleRemovePhoto = (index) => {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleNext = async () => {
     if (step < STEPS.length - 1) return setStep(step + 1);
+
     setLoading(true);
+    const photoUrls = photos.map((p) => p.publicUrl).filter(Boolean);
+
     await createProfile({
       display_name: displayName,
       date_of_birth: dob,
@@ -62,7 +99,7 @@ export default function OnboardingPage() {
       monthly_income_bracket: income || null,
       profession: profession || null,
       bio: bio || null,
-      photos_urls: photos,
+      photos_urls: photoUrls,
     });
     setLoading(false);
   };
@@ -97,38 +134,53 @@ export default function OnboardingPage() {
           <>
             <h1 className="text-2xl font-bold mb-1">Add your photos</h1>
             <p className="text-[var(--muted)] mb-6">At least 1 photo required. Up to 6.</p>
+            {uploadError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-[var(--radius)] text-red-700 text-sm">
+                {uploadError}
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2">
-              {Array.from({ length: 6 }, (_, i) => (
-                <div
-                  key={i}
-                  className={`aspect-[4/5] rounded-[var(--radius)] border overflow-hidden relative ${
-                    i === 0 ? "border-2 border-accent" : "border-[var(--border)]"
-                  } bg-[var(--surface)]`}
-                >
-                  {photos[i] ? (
-                    <>
-                      <img src={photos[i]} alt="" className="w-full h-full object-cover" />
-                      <button
-                        onClick={() => setPhotos(photos.filter((_, j) => j !== i))}
-                        className="absolute top-1.5 right-1.5 w-6 h-6 bg-accent rounded-full flex items-center justify-center cursor-pointer"
-                      >
-                        <X size={12} className="text-white" />
-                      </button>
-                      {i === 0 && (
-                        <span className="absolute bottom-1.5 left-1.5 bg-accent text-white text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm">
-                          MAIN
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <label className="flex flex-col items-center justify-center h-full cursor-pointer hover:bg-[var(--border)]/20 transition-colors">
-                      <Plus size={24} className="text-[var(--muted)]" />
-                      {i === 0 && <span className="text-[9px] font-semibold tracking-wider text-[var(--muted)] mt-1">REQUIRED</span>}
-                      <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-                    </label>
-                  )}
-                </div>
-              ))}
+              {Array.from({ length: 6 }, (_, i) => {
+                const photo = photos[i];
+                return (
+                  <div
+                    key={i}
+                    className={`aspect-[4/5] rounded-[var(--radius)] border overflow-hidden relative ${
+                      i === 0 ? "border-2 border-accent" : "border-[var(--border)]"
+                    } bg-[var(--surface)]`}
+                  >
+                    {photo ? (
+                      <>
+                        <img src={photo.localPreview} alt="" className="w-full h-full object-cover" />
+                        {photo.uploading && (
+                          <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                            <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          </div>
+                        )}
+                        {!photo.uploading && (
+                          <button
+                            onClick={() => handleRemovePhoto(i)}
+                            className="absolute top-1.5 right-1.5 w-6 h-6 bg-accent rounded-full flex items-center justify-center cursor-pointer"
+                          >
+                            <X size={12} className="text-white" />
+                          </button>
+                        )}
+                        {i === 0 && (
+                          <span className="absolute bottom-1.5 left-1.5 bg-accent text-white text-[9px] font-bold tracking-wider px-1.5 py-0.5 rounded-sm">
+                            MAIN
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <label className="flex flex-col items-center justify-center h-full cursor-pointer hover:bg-[var(--border)]/20 transition-colors">
+                        <Plus size={24} className="text-[var(--muted)]" />
+                        {i === 0 && <span className="text-[9px] font-semibold tracking-wider text-[var(--muted)] mt-1">REQUIRED</span>}
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoUpload(e, i)} />
+                      </label>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </>
         )}
@@ -198,7 +250,7 @@ export default function OnboardingPage() {
 
         {/* CTA */}
         <div className="mt-8">
-          <Button onClick={handleNext} disabled={!canProceed()} loading={loading}>
+          <Button onClick={handleNext} disabled={!canProceed()} loading={loading || uploadingPhoto}>
             {step === STEPS.length - 1 ? "Finish Profile" : "Continue"}
           </Button>
         </div>
