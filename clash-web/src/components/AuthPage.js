@@ -25,13 +25,13 @@ export default function AuthPage({ onComplete }) {
   };
 
   const handleSendOtp = async () => {
-    if (!email.includes("@")) { setError("Enter a valid email"); return; }
-    setLoading(true); setError("");
-    const { error: e } = await signInWithEmail(email);
-    setLoading(false);
-    if (e) setError(e.message);
-    else { setView("otp"); startCooldown(); }
-  };
+  if (!email.includes("@")) { setError("Enter a valid email"); return; }
+  setLoading(true); setError("");
+  const { error: e } = await signInWithEmail(email);
+  setLoading(false);
+  if (e) setError(e.message);
+  else { setView("sent"); }
+};
 
   const handleVerify = async () => {
     if (otp.length < 6) { setError("Enter the 6-digit code"); return; }
