@@ -2,9 +2,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
-import { ArrowLeft, Image as ImageIcon, Send, MapPin, Mic } from "lucide-react";
+import { ArrowLeft, Image as ImageIcon, Send, MapPin, Mic, X } from "lucide-react";
 
 const SPARK_COLORS = ["#1A1A2E", "#2D1B69", "#0D2137", "#1B2D1B", "#2E1A1A"];
+const CHAT_BUCKET = "chat-photos";
+const MAX_SIZE = 5 * 1024 * 1024;
 
 function BadgePill({ type }) {
   if (type === "clash")
@@ -33,6 +35,23 @@ function formatTimestamp(iso) {
   return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+async function uploadChatPhoto(file, userId, matchId) {
+  if (!file.type.startsWith("image/")) return { error: "Only image files allowed" };
+  if (file.size > MAX_SIZE) return { error: "File must be under 5MB" };
+
+  const ext = file.name.split(".").pop();
+  const path = `${matchId}/${userId}-${Date.now()}.${ext}`;
+
+  const { data, error } = await supabase.storage
+    .from(CHAT_BUCKET)
+    .upload(path, file, { cacheControl: "3600", upsert: false });
+
+  if (error) return { error: error.message };
+
+  const { data: urlData } = supabase.storage.from(CHAT_BUCKET).getPublicUrl(data.path);
+  return { url: urlData.publicUrl, error: null };
+}
+
 export default function MessagesTab() {
   const { user } = useAuth();
   const [matches, setMatches] = useState([]);
@@ -41,14 +60,16 @@ export default function MessagesTab() {
   const [input, setInput] = useState("");
   const [loadingMatches, setLoadingMatches] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const fileInputRef = useRef(null);
   const bottomRef = useRef(null);
 
-  // Fetch matches list with last message preview
   const fetchMatches = useCallback(async () => {
     if (!user) return;
     setLoadingMatches(true);
 
-    // Get all matches involving the current user
     const { data: matchesData } = await supabase
       .from("matches")
       .select("*")
@@ -61,14 +82,12 @@ export default function MessagesTab() {
       return;
     }
 
-    // Get the OTHER user's profile for each match
     const otherIds = matchesData.map((m) => (m.user_a === user.id ? m.user_b : m.user_a));
     const { data: profiles } = await supabase
       .from("profiles")
       .select("id, display_name, photos_urls")
       .in("id", otherIds);
 
-    // Get last message for each match
     const enriched = await Promise.all(
       matchesData.map(async (m) => {
         const otherId = m.user_a === user.id ? m.user_b : m.user_a;
@@ -76,19 +95,20 @@ export default function MessagesTab() {
 
         const { data: lastMsg } = await supabase
           .from("messages")
-          .select("content, created_at")
+          .select("content, image_url, created_at")
           .eq("match_id", m.id)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
+
+        const preview = lastMsg?.image_url ? "📷 Photo" : (lastMsg?.content || "Say hi 👋");
 
         return {
           id: m.id,
           matchType: m.match_type,
           name: otherProfile?.display_name || "Unknown",
           avatar: otherProfile?.photos_urls?.[0] || null,
-          lastMsg: lastMsg?.content || "Say hi 👋",
-          lastMsgTime: lastMsg?.created_at,
+          lastMsg: preview,
           time: lastMsg ? formatTime(lastMsg.created_at) : formatTime(m.matched_at),
           otherId,
         };
@@ -99,15 +119,12 @@ export default function MessagesTab() {
     setLoadingMatches(false);
   }, [user]);
 
-  // Initial matches load
-  useEffect(() => {
-    fetchMatches();
-  }, [fetchMatches]);
+  useEffect(() => { fetchMatches(); }, [fetchMatches]);
 
-  // Load messages when opening a chat
   useEffect(() => {
     if (!activeChat) return;
     let cancelled = false;
+    setUploadError("");
 
     async function loadMessages() {
       setLoadingMessages(true);
@@ -126,36 +143,23 @@ export default function MessagesTab() {
     return () => { cancelled = true; };
   }, [activeChat]);
 
-  // Realtime subscription for new messages in the active chat
   useEffect(() => {
     if (!activeChat) return;
-
     const channel = supabase
       .channel(`messages:${activeChat.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `match_id=eq.${activeChat.id}`,
-        },
-        (payload) => {
-          setMessages((prev) => {
-            // Avoid duplicates if our own message is echoed back
-            if (prev.find((m) => m.id === payload.new.id)) return prev;
-            return [...prev, payload.new];
-          });
-        }
-      )
+      .on("postgres_changes", {
+        event: "INSERT", schema: "public", table: "messages",
+        filter: `match_id=eq.${activeChat.id}`,
+      }, (payload) => {
+        setMessages((prev) => {
+          if (prev.find((m) => m.id === payload.new.id)) return prev;
+          return [...prev, payload.new];
+        });
+      })
       .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => supabase.removeChannel(channel);
   }, [activeChat]);
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activeChat]);
@@ -167,22 +171,15 @@ export default function MessagesTab() {
 
     const { data, error } = await supabase
       .from("messages")
-      .insert([{
-        match_id: activeChat.id,
-        sender_id: user.id,
-        content,
-      }])
+      .insert([{ match_id: activeChat.id, sender_id: user.id, content }])
       .select()
       .single();
 
     if (error) {
       console.error("Send failed:", error);
-      // Restore input on failure
       setInput(content);
       return;
     }
-
-    // Optimistic local add (realtime will dedupe if it echoes back)
     if (data) {
       setMessages((prev) => {
         if (prev.find((m) => m.id === data.id)) return prev;
@@ -191,101 +188,191 @@ export default function MessagesTab() {
     }
   };
 
-  // ----- Chat view -----
+  const handlePhotoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeChat || !user) return;
+    e.target.value = "";
+    setUploading(true);
+    setUploadError("");
+
+    const { url, error } = await uploadChatPhoto(file, user.id, activeChat.id);
+    if (error) {
+      setUploadError(error);
+      setUploading(false);
+      return;
+    }
+
+    const { data, error: msgError } = await supabase
+      .from("messages")
+      .insert([{ match_id: activeChat.id, sender_id: user.id, image_url: url }])
+      .select()
+      .single();
+
+    setUploading(false);
+    if (msgError) {
+      setUploadError("Failed to send photo: " + msgError.message);
+      return;
+    }
+
+    if (data) {
+      setMessages((prev) => {
+        if (prev.find((m) => m.id === data.id)) return prev;
+        return [...prev, data];
+      });
+    }
+  };
+
   if (activeChat) {
     const isSpark = activeChat.matchType === "spark";
     const canMedia = activeChat.matchType === "clash" || activeChat.matchType === "normal";
 
     return (
-      <div className="h-full flex flex-col">
-        <div className="flex items-center gap-3 px-5 py-3 border-b border-[var(--border)]">
-          <button onClick={() => setActiveChat(null)} className="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer">
-            <ArrowLeft size={20} />
-          </button>
-          {isSpark ? (
-            <Mic size={16} className="text-amber-500" />
-          ) : activeChat.avatar ? (
-            <img src={activeChat.avatar} alt="" className="w-8 h-8 rounded-[var(--radius)] object-cover" />
-          ) : (
-            <div className="w-8 h-8 rounded-[var(--radius)] bg-[var(--surface)] border border-[var(--border)]" />
-          )}
-          <div className="flex items-center gap-2 flex-1">
-            <span className="font-semibold">{activeChat.name}</span>
-            <BadgePill type={activeChat.matchType} />
-          </div>
-          <button className="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer" title="Plan a date">
-            <MapPin size={18} />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
-          {loadingMessages ? (
-            <div className="text-center text-sm text-[var(--muted)] py-8">Loading messages...</div>
-          ) : messages.length === 0 ? (
-            <div className="text-center text-sm text-[var(--muted)] py-8">
-              No messages yet. Send the first one!
+      <>
+        <div className="h-full flex flex-col">
+          <div className="flex items-center gap-3 px-5 py-3 border-b border-[var(--border)]">
+            <button onClick={() => setActiveChat(null)} className="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer">
+              <ArrowLeft size={20} />
+            </button>
+            {isSpark ? (
+              <Mic size={16} className="text-amber-500" />
+            ) : activeChat.avatar ? (
+              <img src={activeChat.avatar} alt="" className="w-8 h-8 rounded-[var(--radius)] object-cover" />
+            ) : (
+              <div className="w-8 h-8 rounded-[var(--radius)] bg-[var(--surface)] border border-[var(--border)]" />
+            )}
+            <div className="flex items-center gap-2 flex-1">
+              <span className="font-semibold">{activeChat.name}</span>
+              <BadgePill type={activeChat.matchType} />
             </div>
-          ) : (
-            messages.map((msg, i) => {
-              const isMe = msg.sender_id === user.id;
-              if (isSpark) {
+            <button className="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer" title="Plan a date">
+              <MapPin size={18} />
+            </button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-2">
+            {loadingMessages ? (
+              <div className="text-center text-sm text-[var(--muted)] py-8">Loading messages...</div>
+            ) : messages.length === 0 ? (
+              <div className="text-center text-sm text-[var(--muted)] py-8">
+                No messages yet. Send the first one!
+              </div>
+            ) : (
+              messages.map((msg, i) => {
+                const isMe = msg.sender_id === user.id;
+                const isImage = !!msg.image_url;
+
+                if (isImage) {
+                  return (
+                    <div key={msg.id} className={`max-w-[78%] ${isMe ? "ml-auto" : ""}`}>
+                      <div
+                        className={`rounded-[var(--radius)] overflow-hidden cursor-pointer border ${
+                          isMe ? "border-accent" : "border-[var(--border)]"
+                        }`}
+                        onClick={() => setLightboxImage(msg.image_url)}
+                      >
+                        <img src={msg.image_url} alt="Shared photo" className="max-w-full max-h-[300px] object-cover" />
+                      </div>
+                      <p className={`text-[10px] mt-1 px-1 ${isMe ? "text-right" : ""} text-[var(--muted)]`}>
+                        {formatTimestamp(msg.created_at)}
+                      </p>
+                    </div>
+                  );
+                }
+
+                if (isSpark) {
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`max-w-[78%] px-4 py-3 rounded-[var(--radius)] ${isMe ? "ml-auto" : ""}`}
+                      style={{ backgroundColor: isMe ? "#E30613" : SPARK_COLORS[i % SPARK_COLORS.length] }}
+                    >
+                      <p className="text-white text-sm">{msg.content}</p>
+                      <p className="text-white/50 text-xs text-right mt-1">{formatTimestamp(msg.created_at)}</p>
+                    </div>
+                  );
+                }
+
                 return (
                   <div
                     key={msg.id}
-                    className={`max-w-[78%] px-4 py-3 rounded-[var(--radius)] ${isMe ? "ml-auto" : ""}`}
-                    style={{ backgroundColor: isMe ? "#E30613" : SPARK_COLORS[i % SPARK_COLORS.length] }}
+                    className={`max-w-[78%] px-4 py-2.5 rounded-[var(--radius)] ${
+                      isMe ? "ml-auto bg-accent text-white" : "bg-[var(--surface)] border border-[var(--border)]"
+                    }`}
                   >
-                    <p className="text-white text-sm">{msg.content}</p>
-                    <p className="text-white/50 text-xs text-right mt-1">{formatTimestamp(msg.created_at)}</p>
+                    <p className="text-sm">{msg.content}</p>
+                    <p className={`text-xs text-right mt-1 ${isMe ? "text-white/60" : "text-[var(--muted)]"}`}>
+                      {formatTimestamp(msg.created_at)}
+                    </p>
                   </div>
                 );
-              }
-              return (
-                <div
-                  key={msg.id}
-                  className={`max-w-[78%] px-4 py-2.5 rounded-[var(--radius)] ${
-                    isMe ? "ml-auto bg-accent text-white" : "bg-[var(--surface)] border border-[var(--border)]"
-                  }`}
-                >
-                  <p className="text-sm">{msg.content}</p>
-                  <p className={`text-xs text-right mt-1 ${isMe ? "text-white/60" : "text-[var(--muted)]"}`}>
-                    {formatTimestamp(msg.created_at)}
-                  </p>
-                </div>
-              );
-            })
+              })
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {uploadError && (
+            <div className="mx-5 mb-2 p-2 bg-red-50 border border-red-200 rounded-[var(--radius)] text-red-700 text-xs">
+              {uploadError}
+            </div>
           )}
-          <div ref={bottomRef} />
+
+          <div className="flex items-end gap-2 px-5 py-3 border-t border-[var(--border)]">
+            {canMedia && (
+              <>
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoSelect} />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  className="w-10 h-10 flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] cursor-pointer disabled:opacity-40"
+                  title="Send photo"
+                >
+                  {uploading ? (
+                    <div className="w-5 h-5 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <ImageIcon size={20} />
+                  )}
+                </button>
+              </>
+            )}
+            <input
+              className="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius)] px-4 py-2.5 text-sm outline-none text-[var(--text)] placeholder:text-[var(--muted)]"
+              placeholder={isSpark ? "Text only in Spark chats..." : "Type a message..."}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
+            />
+            <button
+              onClick={sendMessage}
+              disabled={!input.trim()}
+              className={`w-9 h-9 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                input.trim() ? "bg-accent text-white" : "bg-[var(--surface)] text-[var(--muted)]"
+              }`}
+            >
+              <Send size={16} />
+            </button>
+          </div>
         </div>
 
-        <div className="flex items-end gap-2 px-5 py-3 border-t border-[var(--border)]">
-          {canMedia && (
-            <button className="w-10 h-10 flex items-center justify-center text-[var(--muted)] hover:text-[var(--text)] cursor-pointer">
-              <ImageIcon size={20} />
-            </button>
-          )}
-          <input
-            className="flex-1 bg-[var(--surface)] border border-[var(--border)] rounded-[var(--radius)] px-4 py-2.5 text-sm outline-none text-[var(--text)] placeholder:text-[var(--muted)]"
-            placeholder={isSpark ? "Text only in Spark chats..." : "Type a message..."}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMessage())}
-          />
-          <button
-            onClick={sendMessage}
-            disabled={!input.trim()}
-            className={`w-9 h-9 rounded-full flex items-center justify-center transition-all cursor-pointer ${
-              input.trim() ? "bg-accent text-white" : "bg-[var(--surface)] text-[var(--muted)]"
-            }`}
+        {lightboxImage && (
+          <div
+            onClick={() => setLightboxImage(null)}
+            className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 cursor-pointer"
           >
-            <Send size={16} />
-          </button>
-        </div>
-      </div>
+            <button className="absolute top-4 right-4 text-white p-2 hover:opacity-70">
+              <X size={24} />
+            </button>
+            <img
+              src={lightboxImage}
+              alt="Full size"
+              className="max-w-full max-h-full object-contain"
+              onClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        )}
+      </>
     );
   }
 
-  // ----- Chat list view -----
   return (
     <div className="h-full flex flex-col">
       <div className="px-5 py-4">
