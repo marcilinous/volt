@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import Button from "@/components/ui/Button";
+import EditProfilePage from "@/components/EditProfilePage";
 import { useAuth } from "@/lib/auth";
 import { Star, Play, Bell, Shield, HelpCircle, FileText, ChevronRight, LogOut } from "lucide-react";
 
@@ -8,6 +9,11 @@ export default function ProfileTab() {
   const { profile, signOut } = useAuth();
   const [tokens, setTokens] = useState(5);
   const [isPremium, setIsPremium] = useState(false);
+  const [editing, setEditing] = useState(false);
+
+  if (editing) {
+    return <EditProfilePage onClose={() => setEditing(false)} />;
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -26,7 +32,10 @@ export default function ProfileTab() {
           <p className="text-sm text-[var(--muted)]">
             {profile?.current_city || "City"} · {profile?.profession || ""}
           </p>
-          <button className="mt-3 px-5 py-2 border border-[var(--border)] rounded-[var(--radius)] text-[11px] font-semibold tracking-wider uppercase hover:border-[var(--muted)] transition-colors cursor-pointer">
+          <button
+            onClick={() => setEditing(true)}
+            className="mt-3 px-5 py-2 border border-[var(--border)] rounded-[var(--radius)] text-[11px] font-semibold tracking-wider uppercase hover:border-[var(--muted)] transition-colors cursor-pointer"
+          >
             Edit Profile
           </button>
         </div>
