@@ -5,10 +5,10 @@ import { uploadPhoto } from "@/lib/storage";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import ChipSelector from "@/components/ui/ChipSelector";
-import { RELIGIONS, LANGUAGES, INTENTS, USER_TYPES, INCOME_BRACKETS, AI_PROMPTS } from "@/lib/constants";
+import { INTENTS } from "@/lib/constants";
 import { ArrowLeft, Plus, X } from "lucide-react";
 
-const STEPS = ["photos", "details", "prompts", "intent"];
+const STEPS = ["essentials", "intent"];
 
 export default function OnboardingPage() {
   const { user, createProfile } = useAuth();
@@ -16,19 +16,11 @@ export default function OnboardingPage() {
   const [loading, setLoading] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  const [photos, setPhotos] = useState([]); // Array of { localPreview, publicUrl }
+  const [photos, setPhotos] = useState([]);
   const [displayName, setDisplayName] = useState("");
   const [dob, setDob] = useState("");
   const [gender, setGender] = useState("");
-  const [userCategory, setUserCategory] = useState("");
-  const [birthCity, setBirthCity] = useState("");
   const [currentCity, setCurrentCity] = useState("");
-  const [religion, setReligion] = useState("");
-  const [languages, setLanguages] = useState([]);
-  const [income, setIncome] = useState("");
-  const [profession, setProfession] = useState("");
-  const [bio, setBio] = useState("");
-  const [answers, setAnswers] = useState(["", "", ""]);
   const [intent, setIntent] = useState("");
   const [uploadError, setUploadError] = useState("");
 
@@ -36,21 +28,19 @@ export default function OnboardingPage() {
 
   const canProceed = () => {
     switch (current) {
-      case "photos": return photos.length >= 1 && !uploadingPhoto;
-      case "details": return displayName && dob && gender && userCategory && birthCity && currentCity && languages.length > 0;
-      case "prompts": return answers.some((a) => a.trim());
-      case "intent": return !!intent;
+      case "essentials":
+        return photos.length >= 1 && displayName && dob && gender && currentCity && !uploadingPhoto;
+      case "intent":
+        return !!intent;
     }
   };
 
   const handlePhotoUpload = async (e, index) => {
     const file = e.target.files[0];
     if (!file || !user) return;
-
     setUploadingPhoto(true);
     setUploadError("");
 
-    // Show local preview immediately
     const localPreview = URL.createObjectURL(file);
     setPhotos((prev) => {
       const updated = [...prev];
@@ -58,9 +48,7 @@ export default function OnboardingPage() {
       return updated;
     });
 
-    // Upload to Supabase Storage
     const { url, error } = await uploadPhoto(file, user.id, index);
-
     if (error) {
       setUploadError(error);
       setPhotos((prev) => prev.filter((_, i) => i !== index));
@@ -68,7 +56,6 @@ export default function OnboardingPage() {
       return;
     }
 
-    // Replace preview with real public URL
     setPhotos((prev) => {
       const updated = [...prev];
       updated[index] = { localPreview, publicUrl: url, uploading: false };
@@ -91,15 +78,12 @@ export default function OnboardingPage() {
       display_name: displayName,
       date_of_birth: dob,
       gender,
-      user_category: userCategory,
-      birth_city: birthCity,
+      user_category: "early_career",
+      birth_city: currentCity,
       current_city: currentCity,
-      religion: religion || null,
-      languages,
-      monthly_income_bracket: income || null,
-      profession: profession || null,
-      bio: bio || null,
+      languages: ["English"],
       photos_urls: photoUrls,
+      intent,
     });
     setLoading(false);
   };
@@ -107,7 +91,6 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen flex items-start justify-center px-5 py-8">
       <div className="w-full max-w-lg">
-        {/* Top bar */}
         <div className="flex items-center justify-between mb-8">
           {step > 0 ? (
             <button onClick={() => setStep(step - 1)} className="text-[var(--muted)] hover:text-[var(--text)] cursor-pointer">
@@ -121,7 +104,7 @@ export default function OnboardingPage() {
                 key={i}
                 className={`h-1 rounded-full transition-all ${
                   i <= step ? "bg-accent" : "bg-[var(--border)]"
-                } ${i === step ? "w-6" : "w-2"}`}
+                } ${i === step ? "w-8" : "w-3"}`}
               />
             ))}
           </div>
@@ -129,18 +112,20 @@ export default function OnboardingPage() {
           <span className="text-xs text-[var(--muted)]">{step + 1}/{STEPS.length}</span>
         </div>
 
-        {/* Photos step */}
-        {current === "photos" && (
+        {current === "essentials" && (
           <>
-            <h1 className="text-2xl font-bold mb-1">Add your photos</h1>
-            <p className="text-[var(--muted)] mb-6">At least 1 photo required. Up to 6.</p>
+            <h1 className="text-2xl font-bold mb-1">Quick start</h1>
+            <p className="text-[var(--muted)] mb-6">Just the basics — you can add more later.</p>
+
             {uploadError && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-[var(--radius)] text-red-700 text-sm">
                 {uploadError}
               </div>
             )}
-            <div className="grid grid-cols-3 gap-2">
-              {Array.from({ length: 6 }, (_, i) => {
+
+            <p className="text-[11px] font-semibold tracking-wider uppercase text-[var(--muted)] mb-2">Add a photo</p>
+            <div className="grid grid-cols-3 gap-2 mb-6">
+              {Array.from({ length: 3 }, (_, i) => {
                 const photo = photos[i];
                 return (
                   <div
@@ -182,51 +167,26 @@ export default function OnboardingPage() {
                 );
               })}
             </div>
-          </>
-        )}
 
-        {/* Details step */}
-        {current === "details" && (
-          <>
-            <h1 className="text-2xl font-bold mb-6">About you</h1>
-            <Input label="Display name" placeholder="What should we call you?" value={displayName} onChange={setDisplayName} maxLength={100} />
+            <Input label="Your name" placeholder="First name is fine" value={displayName} onChange={setDisplayName} maxLength={100} />
             <Input label="Date of birth" type="date" value={dob} onChange={setDob} />
-            <ChipSelector label="Gender" options={[{ key: "M", label: "Male" }, { key: "F", label: "Female" }, { key: "O", label: "Other" }]} selected={gender} onToggle={setGender} multi={false} />
-            <ChipSelector label="I am a" options={USER_TYPES} selected={userCategory} onToggle={setUserCategory} multi={false} />
-            <Input label="Birth city" placeholder="Where are you from?" value={birthCity} onChange={setBirthCity} />
-            <Input label="Current city" placeholder="Where do you live now?" value={currentCity} onChange={setCurrentCity} />
-            <ChipSelector label="Languages" options={LANGUAGES} selected={languages} onToggle={setLanguages} />
-            <ChipSelector label="Religion (optional)" options={RELIGIONS} selected={religion} onToggle={setReligion} multi={false} />
-            <Input label="Profession (optional)" placeholder="What do you do?" value={profession} onChange={setProfession} />
-            <ChipSelector label="Monthly income (optional)" options={INCOME_BRACKETS} selected={income} onToggle={setIncome} multi={false} />
-            <Input label="Bio (optional)" placeholder="Something about you..." value={bio} onChange={setBio} multiline maxLength={500} />
+            <ChipSelector
+              label="I am"
+              options={[
+                { key: "M", label: "Male" },
+                { key: "F", label: "Female" },
+                { key: "O", label: "Other" },
+              ]}
+              selected={gender} onToggle={setGender} multi={false}
+            />
+            <Input label="City you live in" placeholder="e.g. Bangalore" value={currentCity} onChange={setCurrentCity} />
           </>
         )}
 
-        {/* Prompts step */}
-        {current === "prompts" && (
-          <>
-            <h1 className="text-2xl font-bold mb-1">Answer some prompts</h1>
-            <p className="text-[var(--muted)] mb-6">These help others start a conversation.</p>
-            {AI_PROMPTS.map((q, i) => (
-              <div key={i} className="mb-6">
-                <p className="text-base font-semibold italic text-[var(--text)] mb-2">{q}</p>
-                <Input
-                  placeholder="Your answer..."
-                  value={answers[i]}
-                  onChange={(v) => { const a = [...answers]; a[i] = v; setAnswers(a); }}
-                  multiline
-                  maxLength={200}
-                />
-              </div>
-            ))}
-          </>
-        )}
-
-        {/* Intent step */}
         {current === "intent" && (
           <>
-            <h1 className="text-2xl font-bold mb-6">What are you looking for?</h1>
+            <h1 className="text-2xl font-bold mb-1">Last question</h1>
+            <p className="text-[var(--muted)] mb-6">What are you looking for?</p>
             <div className="space-y-3">
               {INTENTS.map((item) => (
                 <button
@@ -248,10 +208,9 @@ export default function OnboardingPage() {
           </>
         )}
 
-        {/* CTA */}
         <div className="mt-8">
           <Button onClick={handleNext} disabled={!canProceed()} loading={loading || uploadingPhoto}>
-            {step === STEPS.length - 1 ? "Finish Profile" : "Continue"}
+            {step === STEPS.length - 1 ? "Start Matching" : "Continue"}
           </Button>
         </div>
       </div>
