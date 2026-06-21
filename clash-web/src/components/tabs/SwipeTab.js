@@ -1,46 +1,73 @@
 "use client";
 import { useState, useEffect, useMemo } from "react";
+import { motion, AnimatePresence, useMotionValue, useTransform } from "framer-motion";
 import { useAuth } from "@/lib/auth";
-import { getSwipeStack, recordSwipe } from "@/lib/matching";
+import { supabase } from "@/lib/supabase";
+import { recordSwipe } from "@/lib/matching";
 import ProfileCard, { AdCard } from "@/components/cards/ProfileCard";
-import { Heart } from "lucide-react";
+import { Heart, Flame } from "lucide-react";
 
-export default function SwipeTab() {
+export default function SwipeTab({ onSwitchToClash }) {
   const { user } = useAuth();
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [index, setIndex] = useState(0);
   const [matchAlert, setMatchAlert] = useState(null);
+  const [swipingDir, setSwipingDir] = useState(null);
 
   useEffect(() => {
     if (!user) return;
 
-    async function fetchProfiles() {
+    async function fetchAllProfiles() {
       setLoading(true);
-      const { data, error } = await getSwipeStack(user.id, 20);
+
+      const { data: swipes } = await supabase
+        .from("swipe_actions")
+        .select("target_id, action")
+        .eq("user_id", user.id);
+
+      const swipeMap = new Map();
+      (swipes || []).forEach((s) => swipeMap.set(s.target_id, s.action));
+
+      const { data: allProfiles, error } = await supabase
+        .from("profiles")
+        .select("*, ai_prompt_responses(*)")
+        .neq("id", user.id)
+        .limit(100);
+
       if (error) {
         console.error("Error fetching profiles:", error);
         setProfiles([]);
-      } else {
-        const mapped = (data || []).map((p) => ({
-          id: p.id,
-          name: p.display_name,
-          age: p.date_of_birth
-            ? Math.floor((Date.now() - new Date(p.date_of_birth)) / 31557600000)
-            : null,
-          city: p.current_city,
-          profession: p.profession,
-          category: p.user_category,
-          photo: p.photos_urls?.[0] || null,
-          promptQ: p.ai_prompt_responses?.[0]?.question_text,
-          promptA: p.ai_prompt_responses?.[0]?.answer_text,
-        }));
-        setProfiles(mapped);
+        setLoading(false);
+        return;
       }
+
+      const mapped = (allProfiles || []).map((p) => ({
+        id: p.id,
+        name: p.display_name,
+        age: p.date_of_birth
+          ? Math.floor((Date.now() - new Date(p.date_of_birth)) / 31557600000)
+          : null,
+        city: p.current_city,
+        profession: p.profession,
+        category: p.user_category,
+        photo: p.photos_urls?.[0] || null,
+        promptQ: p.ai_prompt_responses?.[0]?.question_text,
+        promptA: p.ai_prompt_responses?.[0]?.answer_text,
+        previousAction: swipeMap.get(p.id) || null,
+      }));
+
+      // Sort: unswiped first, then passed, then super_like, then liked
+      mapped.sort((a, b) => {
+        const order = { null: 0, pass: 1, super_like: 2, like: 3 };
+        return (order[a.previousAction] ?? 0) - (order[b.previousAction] ?? 0);
+      });
+
+      setProfiles(mapped);
       setLoading(false);
     }
 
-    fetchProfiles();
+    fetchAllProfiles();
   }, [user]);
 
   const stack = useMemo(() => {
@@ -56,7 +83,8 @@ export default function SwipeTab() {
     return items;
   }, [profiles]);
 
-  const current = stack[index];
+  const cycleIndex = stack.length > 0 ? index % stack.length : 0;
+  const current = stack[cycleIndex];
 
   const handleAction = async (action) => {
     if (!current || current.type !== "profile") {
@@ -66,10 +94,15 @@ export default function SwipeTab() {
 
     const { matched } = await recordSwipe(user.id, current.id, action);
 
+    setProfiles((prev) => prev.map((p) =>
+      p.id === current.id ? { ...p, previousAction: action } : p
+    ));
+
     if (matched) {
       setMatchAlert({ name: current.name, photo: current.photo });
     }
 
+    setSwipingDir(null);
     setIndex((p) => p + 1);
   };
 
@@ -108,15 +141,11 @@ export default function SwipeTab() {
     );
   }
 
-  if (!current || index >= stack.length) {
+  if (!current) {
     return (
       <div className="h-full flex flex-col items-center justify-center text-center px-10">
-        <h2 className="text-2xl font-bold">No more profiles</h2>
-        <p className="text-[var(--muted)] mt-2">
-          {profiles.length === 0
-            ? "No profiles available yet. Check back later."
-            : "You've seen everyone for now. Check back later."}
-        </p>
+        <h2 className="text-2xl font-bold">No profiles yet</h2>
+        <p className="text-[var(--muted)] mt-2">Check back later for new people.</p>
       </div>
     );
   }
@@ -125,27 +154,120 @@ export default function SwipeTab() {
     <div className="h-full flex flex-col overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border)] shrink-0">
         <h2 className="text-lg font-semibold">Discover</h2>
-        <span className="text-xs text-[var(--muted)]">
-          {Math.min(index + 1, stack.length)} / {stack.length}
-        </span>
+        <div className="flex items-center gap-3">
+          {onSwitchToClash && (
+            <button
+              onClick={onSwitchToClash}
+              className="flex items-center gap-1 text-accent text-xs font-semibold uppercase tracking-wider hover:opacity-80 cursor-pointer"
+            >
+              <Flame size={14} /> Daily Clash
+            </button>
+          )}
+          <span className="text-xs text-[var(--muted)]">
+            {cycleIndex + 1} / {stack.length}
+          </span>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto flex items-start justify-center p-4">
-        <div className="w-full max-w-[400px]">
-          {current.type === "ad" ? (
-            <div onClick={() => setIndex((p) => p + 1)} className="cursor-pointer">
-              <AdCard />
-            </div>
-          ) : (
-            <ProfileCard
-              profile={current}
+        <div className="w-full max-w-[400px] relative">
+          <AnimatePresence mode="wait">
+            <SwipeableCard
+              key={`${current.id || current.type}-${index}`}
+              item={current}
               onLike={() => handleAction("like")}
               onPass={() => handleAction("pass")}
               onSuperLike={() => handleAction("super_like")}
+              onSkipAd={() => setIndex((p) => p + 1)}
+              onSwipingChange={setSwipingDir}
             />
+          </AnimatePresence>
+
+          {swipingDir === "like" && (
+            <div className="absolute top-8 right-8 border-4 border-green-500 text-green-500 px-4 py-2 rounded-[var(--radius)] font-extrabold text-2xl rotate-12 pointer-events-none z-30">
+              LIKE
+            </div>
+          )}
+          {swipingDir === "pass" && (
+            <div className="absolute top-8 left-8 border-4 border-red-500 text-red-500 px-4 py-2 rounded-[var(--radius)] font-extrabold text-2xl -rotate-12 pointer-events-none z-30">
+              PASS
+            </div>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+function SwipeableCard({ item, onLike, onPass, onSuperLike, onSkipAd, onSwipingChange }) {
+  const x = useMotionValue(0);
+  const rotate = useTransform(x, [-200, 200], [-25, 25]);
+  const opacity = useTransform(x, [-300, -150, 0, 150, 300], [0, 1, 1, 1, 0]);
+
+  const handleDragEnd = (event, info) => {
+    const threshold = 100;
+    if (info.offset.x > threshold) {
+      onLike();
+    } else if (info.offset.x < -threshold) {
+      onPass();
+    }
+    onSwipingChange(null);
+  };
+
+  const handleDrag = (event, info) => {
+    if (info.offset.x > 50) onSwipingChange("like");
+    else if (info.offset.x < -50) onSwipingChange("pass");
+    else onSwipingChange(null);
+  };
+
+  if (item.type === "ad") {
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        onClick={onSkipAd}
+        className="cursor-pointer"
+      >
+        <AdCard />
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      style={{ x, rotate, opacity }}
+      drag="x"
+      dragConstraints={{ left: 0, right: 0 }}
+      dragElastic={0.7}
+      onDrag={handleDrag}
+      onDragEnd={handleDragEnd}
+      initial={{ scale: 0.95, opacity: 0 }}
+      animate={{ scale: 1, opacity: 1 }}
+      exit={{ x: 0, opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      className="cursor-grab active:cursor-grabbing relative"
+    >
+      {item.previousAction && (
+        <div className="absolute -top-2 -right-2 z-20">
+          <span className={`px-3 py-1 rounded-[var(--radius)] text-[10px] font-bold tracking-wider uppercase shadow-lg ${
+            item.previousAction === "like" || item.previousAction === "super_like"
+              ? "bg-accent text-white"
+              : "bg-[var(--surface)] border border-[var(--border)] text-[var(--muted)]"
+          }`}>
+            {item.previousAction === "like" && "✓ Liked"}
+            {item.previousAction === "super_like" && "★ Super Liked"}
+            {item.previousAction === "pass" && "✕ Passed"}
+          </span>
+        </div>
+      )}
+
+      <ProfileCard
+        profile={item}
+        onLike={onLike}
+        onPass={onPass}
+        onSuperLike={onSuperLike}
+      />
+    </motion.div>
   );
 }
