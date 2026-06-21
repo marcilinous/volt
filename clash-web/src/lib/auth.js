@@ -36,13 +36,13 @@ export function AuthProvider({ children }) {
   }
 
   async function signInWithEmail(email) {
-  return supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
-    },
-  });
-}
+    return supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+      },
+    });
+  }
 
   async function verifyOtp(email, token) {
     return supabase.auth.verifyOtp({ email, token, type: "email" });
@@ -68,12 +68,23 @@ export function AuthProvider({ children }) {
     return { data: created, error };
   }
 
+  async function updateProfile(data) {
+    const { data: updated, error } = await supabase
+      .from("profiles")
+      .update({ ...data, updated_at: new Date().toISOString() })
+      .eq("id", user.id)
+      .select()
+      .single();
+    if (updated) setProfile(updated);
+    return { data: updated, error };
+  }
+
   return (
     <AuthContext.Provider
       value={{
         user, profile, loading,
         signInWithEmail, verifyOtp, signInWithProvider,
-        signOut, createProfile, fetchProfile,
+        signOut, createProfile, updateProfile, fetchProfile,
       }}
     >
       {children}
