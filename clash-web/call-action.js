@@ -102,7 +102,7 @@ export default async function handler(req, res) {
         if (data && data.length > 0) {
           // Fetch caller name
           const { data: caller } = await sbFetch(
-            `candidates?id=eq.${data[0].caller_id}&select=full_name`
+            `users?id=eq.${data[0].caller_id}&select=full_name`
           );
           return res.json({
             incoming: true,
